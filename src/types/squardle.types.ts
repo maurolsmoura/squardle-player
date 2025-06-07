@@ -14,8 +14,17 @@ export type Hint = {
 export type BoardStateResponse = {
   guessesRemaining: number;
   nextGuessIndex: number;
+  language: Language;
   boardState: Cell[][];
 };
+
+export enum Language {
+  EN = 'en', // English
+  BR = 'pt-br', // Portuguese (Brazil)
+  ES = 'es', // Spanish
+  DE = 'de', // German
+  SV = 'sv', // Swedish
+}
 
 export enum HintType {
   HorizontalSimple = 'HorizontalSimple',

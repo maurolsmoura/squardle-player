@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as puppeteer from 'puppeteer';
-import { Cell, BoardStateResponse } from '../types/squardle.types';
+import { Cell, BoardStateResponse, Language } from '../types/squardle.types';
 
 /**
  * Service responsible for scraping the Squardle game board state using Puppeteer.
@@ -213,11 +213,70 @@ export class SquardleScraperService implements OnModuleInit {
   }
 
   /**
+   * Extracts the current language from the topBar logo image.
+   */
+  private async extractLanguage(page: puppeteer.Page): Promise<Language> {
+    const language = await page.evaluate(() => {
+      // First try to find the topBar element
+      const topBarElement = document.getElementById('topBar');
+      if (!topBarElement) {
+        return 'en'; // Default to English if topBar not found
+      }
+
+      // Look for all img elements within topBar
+      const imgElements = topBarElement.querySelectorAll('img');
+
+      for (const imgElement of imgElements) {
+        const imgSrc = imgElement.src;
+
+        // Check if this is the logo image (contains 'squardle_logo_color')
+        if (imgSrc && imgSrc.includes('squardle_logo_color')) {
+          console.log('imgSrc', imgSrc);
+          if (imgSrc.includes('squardle_logo_color_br.png')) {
+            return 'pt-br'; // Portuguese (Brazil)
+          } else if (imgSrc.includes('squardle_logo_color_es.png')) {
+            return 'es'; // Spanish
+          } else if (imgSrc.includes('squardle_logo_color_de.png')) {
+            return 'de'; // German
+          } else if (imgSrc.includes('squardle_logo_color_sv.png')) {
+            return 'sv'; // Swedish
+          } else {
+            return 'en'; // English (squardle_logo_color.png or default)
+          }
+        }
+      }
+
+      // Fallback: try the direct logo element approach
+      const logoElement = document.getElementById('logo') as HTMLImageElement;
+      if (logoElement && logoElement.src) {
+        const logoSrc = logoElement.src;
+
+        if (logoSrc.includes('squardle_logo_color_br.png')) {
+          return 'pt-br';
+        } else if (logoSrc.includes('squardle_logo_color_es.png')) {
+          return 'es';
+        } else if (logoSrc.includes('squardle_logo_color_de.png')) {
+          return 'de';
+        } else if (logoSrc.includes('squardle_logo_color_sv.png')) {
+          return 'sv';
+        } else {
+          return 'en';
+        }
+      }
+
+      return 'en'; // Default to English
+    });
+
+    return language as Language;
+  }
+
+  /**
    * Extracts the 5x5 board state from the loaded game page.
    */
   private async extractBoardState(page: puppeteer.Page): Promise<{
     guessesRemaining: number;
     nextGuessIndex: number;
+    language: Language;
     boardState: any[][];
   }> {
     this.logger.log('Extracting board state from page');
@@ -225,6 +284,7 @@ export class SquardleScraperService implements OnModuleInit {
     // Extract all data separately for clean separation of concerns
     const guessesRemaining = await this.extractRemainingGuesses(page);
     const nextGuessIndex = await this.extractNextGuessIndex(page);
+    const language = await this.extractLanguage(page);
 
     const boardState = await page.evaluate(() => {
       const board: any[][] = [];
@@ -361,6 +421,7 @@ export class SquardleScraperService implements OnModuleInit {
     return {
       guessesRemaining,
       nextGuessIndex,
+      language,
       boardState,
     };
   }
@@ -428,6 +489,7 @@ export class SquardleScraperService implements OnModuleInit {
       return {
         guessesRemaining: result.guessesRemaining,
         nextGuessIndex: result.nextGuessIndex,
+        language: result.language,
         boardState: result.boardState as Cell[][],
       };
     } catch (error) {

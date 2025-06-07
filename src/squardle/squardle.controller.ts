@@ -55,12 +55,14 @@ export class SquardleController {
    * @returns The board state response containing guesses remaining and 5x5 board state
    */
   @Get('board')
-  @ApiOperation({ summary: 'Get current board state' })
+  @ApiOperation({ summary: 'Get current board state and detect language' })
   @ApiResponse({
     status: 200,
-    description: 'Current board state with remaining guesses',
+    description: 'Current board state with remaining guesses and language',
     example: {
       guessesRemaining: 6,
+      nextGuessIndex: 4,
+      language: 'en',
       boardState: [
         [
           { x: 0, y: 0, letter: 'S', hints: [{ letter: 'S', type: 'Green' }] },
