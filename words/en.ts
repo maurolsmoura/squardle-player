@@ -2315,7 +2315,7 @@ export const answersEn: string[] = [
   'blurt',
   'bonus',
 ];
-export const allowedStartEn: string[] = [
+export const wordsEn: string[] = [
   'aahed',
   'aalii',
   'aargh',

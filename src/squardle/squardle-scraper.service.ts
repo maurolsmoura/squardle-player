@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as puppeteer from 'puppeteer';
-import { Cell, BoardStateResponse, Language } from '../types/squardle.types';
+import { Cell, BoardState, Language } from '../types/squardle.types';
 
 /**
  * Service responsible for scraping the Squardle game board state using Puppeteer.
@@ -405,7 +405,6 @@ export class SquardleScraperService implements OnModuleInit {
             y,
             letter,
             hints,
-            isValid: true,
           });
         }
         board.push(row);
@@ -469,7 +468,7 @@ export class SquardleScraperService implements OnModuleInit {
    * Extracts the current board state from the loaded game page.
    * @returns Promise resolving to a BoardStateResponse containing guessesRemaining and 5x5 Cell matrix representing the game board
    */
-  async getBoardState(): Promise<BoardStateResponse> {
+  async getBoardState(): Promise<BoardState> {
     this.logger.log('Starting board state extraction');
 
     try {
@@ -490,7 +489,7 @@ export class SquardleScraperService implements OnModuleInit {
         guessesRemaining: result.guessesRemaining,
         nextGuessIndex: result.nextGuessIndex,
         language: result.language,
-        boardState: result.boardState as Cell[][],
+        board: result.boardState as Cell[][],
       };
     } catch (error) {
       this.logger.error(

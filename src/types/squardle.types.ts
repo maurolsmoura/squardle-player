@@ -3,7 +3,6 @@ export type Cell = {
   y: number;
   letter: string | null;
   hints: Hint[];
-  isValid?: boolean; // Indicates if the cell is part of active gameplay (cross-shaped layout)
 };
 
 export type Hint = {
@@ -11,11 +10,11 @@ export type Hint = {
   type: HintType;
 };
 
-export type BoardStateResponse = {
+export type BoardState = {
   guessesRemaining: number;
   nextGuessIndex: number;
   language: Language;
-  boardState: Cell[][];
+  board: Cell[][];
 };
 
 export enum Language {

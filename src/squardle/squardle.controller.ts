@@ -1,7 +1,8 @@
 import { Controller, Post, Get, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SquardleScraperService } from './squardle-scraper.service';
-import { BoardStateResponse } from '../types/squardle.types';
+import { SquardlePlayerService } from './squardle-player.service';
+import { BoardState } from '../types/squardle.types';
 
 /**
  * Controller responsible for handling Squardle game operations.
@@ -14,6 +15,7 @@ export class SquardleController {
 
   constructor(
     private readonly squardleScraperService: SquardleScraperService,
+    private readonly squardlePlayerService: SquardlePlayerService,
   ) {}
 
   /**
@@ -72,18 +74,51 @@ export class SquardleController {
     },
   })
   @ApiResponse({ status: 500, description: 'Failed to get board state' })
-  async getBoardState(): Promise<BoardStateResponse> {
+  async getBoardState(): Promise<BoardState> {
     this.logger.log('Retrieving current board state');
 
     try {
       const boardState = await this.squardleScraperService.getBoardState();
 
       this.logger.log(
-        `Retrieved board state with ${boardState.boardState.length}x${boardState.boardState[0]?.length} cells and ${boardState.guessesRemaining} guesses remaining`,
+        `Retrieved board state with ${boardState.board.length}x${boardState.board[0]?.length} cells and ${boardState.guessesRemaining} guesses remaining`,
       );
       return boardState;
     } catch (error) {
       this.logger.error('Failed to retrieve board state', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Determines the next guess based on the current board state.
+   * @returns The next suggested guess
+   */
+  @Get('next-guess')
+  @ApiOperation({ summary: 'Get AI-suggested next guess' })
+  @ApiResponse({
+    status: 200,
+    description: 'Next suggested guess based on current board state',
+    example: {
+      nextGuess: 'areio',
+    },
+  })
+  @ApiResponse({ status: 500, description: 'Failed to determine next guess' })
+  async getNextGuess(): Promise<{ nextGuess: string }> {
+    this.logger.log('Determining next guess');
+
+    try {
+      // Get current board state first
+      const boardState = await this.squardleScraperService.getBoardState();
+
+      // Use the player service to determine next guess
+      const nextGuess =
+        this.squardlePlayerService.determineNextGuess(boardState);
+
+      this.logger.log(`Determined next guess: ${nextGuess}`);
+      return { nextGuess };
+    } catch (error) {
+      this.logger.error('Failed to determine next guess', error);
       throw error;
     }
   }
