@@ -1,7 +1,7 @@
 import { Controller, Post, Get, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SquardleScraperService } from './squardle-scraper.service';
-import { Cell } from '../types/squardle.types';
+import { BoardStateResponse } from '../types/squardle.types';
 
 /**
  * Controller responsible for handling Squardle game operations.
@@ -52,29 +52,32 @@ export class SquardleController {
 
   /**
    * Retrieves the current board state from the active Squardle game.
-   * @returns The 5x5 board state as Cell matrix
+   * @returns The board state response containing guesses remaining and 5x5 board state
    */
   @Get('board')
   @ApiOperation({ summary: 'Get current board state' })
   @ApiResponse({
     status: 200,
-    description: 'Current 5x5 board state',
-    example: [
-      [
-        { x: 0, y: 0, letter: 'S', hints: [{ letter: 'S', type: 1 }] },
-        { x: 1, y: 0, letter: 'Q', hints: [] },
+    description: 'Current board state with remaining guesses',
+    example: {
+      guessesRemaining: 6,
+      boardState: [
+        [
+          { x: 0, y: 0, letter: 'S', hints: [{ letter: 'S', type: 'Green' }] },
+          { x: 1, y: 0, letter: 'Q', hints: [] },
+        ],
       ],
-    ],
+    },
   })
   @ApiResponse({ status: 500, description: 'Failed to get board state' })
-  async getBoardState(): Promise<Cell[][]> {
+  async getBoardState(): Promise<BoardStateResponse> {
     this.logger.log('Retrieving current board state');
 
     try {
       const boardState = await this.squardleScraperService.getBoardState();
 
       this.logger.log(
-        `Retrieved board state with ${boardState.length}x${boardState[0]?.length} cells`,
+        `Retrieved board state with ${boardState.boardState.length}x${boardState.boardState[0]?.length} cells and ${boardState.guessesRemaining} guesses remaining`,
       );
       return boardState;
     } catch (error) {

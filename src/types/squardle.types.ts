@@ -11,6 +11,11 @@ export type Hint = {
   type: HintType;
 };
 
+export type BoardStateResponse = {
+  guessesRemaining: number;
+  boardState: Cell[][];
+};
+
 export enum HintType {
   HorizontalSimple = 'HorizontalSimple',
   HorizontalDouble = 'HorizontalDouble',

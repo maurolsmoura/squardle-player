@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as puppeteer from 'puppeteer';
-import { Cell } from '../types/squardle.types';
+import { Cell, BoardStateResponse } from '../types/squardle.types';
 
 /**
  * Service responsible for scraping the Squardle game board state using Puppeteer.
@@ -159,17 +159,35 @@ export class SquardleScraperService implements OnModuleInit {
   }
 
   /**
+   * Extracts the remaining guesses count from the page.
+   */
+  private async extractRemainingGuesses(page: puppeteer.Page): Promise<number> {
+    const guessesRemaining = await page.evaluate(() => {
+      const remainingElement = document.getElementById('remainingNumberCss');
+      return remainingElement?.textContent?.trim()
+        ? parseInt(remainingElement.textContent.trim(), 10)
+        : 0;
+    });
+
+    return guessesRemaining;
+  }
+
+  /**
    * Extracts the 5x5 board state from the loaded game page.
    */
-  private async extractBoardState(page: puppeteer.Page): Promise<Cell[][]> {
+  private async extractBoardState(
+    page: puppeteer.Page,
+  ): Promise<{ guessesRemaining: number; boardState: any[][] }> {
     this.logger.log('Extracting board state from page');
+
+    // Extract guesses remaining and board state separately
+    const guessesRemaining = await this.extractRemainingGuesses(page);
 
     const boardState = await page.evaluate(() => {
       const board: any[][] = [];
 
       // Define which cells are valid (cross-shaped layout)
       const isValidCell = (x: number, y: number): boolean => {
-        // Invalid corner cells: [1,1], [1,3], [3,1], [3,3]
         return !(
           (x === 1 && y === 1) ||
           (x === 1 && y === 3) ||
@@ -294,9 +312,13 @@ export class SquardleScraperService implements OnModuleInit {
     });
 
     this.logger.log(
-      `Extracted board with ${boardState.length}x${boardState[0]?.length} cells`,
+      `Extracted board with ${boardState.length}x${boardState[0]?.length} cells and ${guessesRemaining} guesses remaining`,
     );
-    return boardState as Cell[][];
+
+    return {
+      guessesRemaining,
+      boardState,
+    };
   }
 
   /**
@@ -340,9 +362,9 @@ export class SquardleScraperService implements OnModuleInit {
 
   /**
    * Extracts the current board state from the loaded game page.
-   * @returns Promise resolving to a 5x5 Cell matrix representing the game board
+   * @returns Promise resolving to a BoardStateResponse containing guessesRemaining and 5x5 Cell matrix representing the game board
    */
-  async getBoardState(): Promise<Cell[][]> {
+  async getBoardState(): Promise<BoardStateResponse> {
     this.logger.log('Starting board state extraction');
 
     try {
@@ -356,10 +378,13 @@ export class SquardleScraperService implements OnModuleInit {
         throw new Error('No active page found. Please start a new game first.');
       }
 
-      const boardState = await this.extractBoardState(this.page);
+      const result = await this.extractBoardState(this.page);
 
       this.logger.log('Successfully extracted board state');
-      return boardState;
+      return {
+        guessesRemaining: result.guessesRemaining,
+        boardState: result.boardState as Cell[][],
+      };
     } catch (error) {
       this.logger.error(
         'Failed to extract board state',
