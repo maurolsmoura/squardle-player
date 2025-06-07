@@ -12,6 +12,7 @@ import {
   SquardlePlayerService,
 } from './squardle-player.service';
 import { BoardState } from '../types/squardle.types';
+import { SquardleInteractionService } from 'src/squardle/squardle-interaction.service';
 
 /**
  * Controller responsible for handling Squardle game operations.
@@ -25,6 +26,7 @@ export class SquardleController {
   constructor(
     private readonly squardleScraperService: SquardleScraperService,
     private readonly squardlePlayerService: SquardlePlayerService,
+    private readonly squardleInteractionService: SquardleInteractionService,
   ) {}
 
   /**
@@ -129,6 +131,34 @@ export class SquardleController {
       }
       this.logger.log(`Determined next guess: ${nextGuess.word}`);
       return nextGuess;
+    } catch (error) {
+      this.logger.error('Failed to determine next guess', error);
+      throw error;
+    }
+  }
+  @Post('play-word')
+  @ApiOperation({ summary: 'Play a word on the board' })
+  @ApiResponse({
+    status: 200,
+    description: 'Word played successfully',
+  })
+  async playWord(): Promise<void> {
+    this.logger.log('Determining next guess');
+
+    try {
+      // Get current board state first
+      const boardState = await this.squardleScraperService.getBoardState();
+      // Use the player service to determine next guess
+      const nextGuess = this.squardlePlayerService.playNextGuess(boardState);
+      if (nextGuess === null) {
+        throw new UnprocessableEntityException(
+          'No next guess found. The board is full or invalid',
+        );
+      }
+      await this.squardleInteractionService.typeWordAndSubmit({
+        page: this.squardleScraperService.page!,
+        word: nextGuess.word,
+      });
     } catch (error) {
       this.logger.error('Failed to determine next guess', error);
       throw error;

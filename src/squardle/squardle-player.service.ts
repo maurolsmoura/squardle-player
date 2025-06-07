@@ -540,8 +540,18 @@ export class SquardlePlayerService {
     return newBoard;
   }
 
-  private isBoardFull(board: BoardState['board']): boolean {
-    return board.every((row) => row.every((cell) => cell.letter !== null));
+  isBoardFull(board: BoardState['board']): boolean {
+    return board
+      .flat()
+      .filter(({ x, y }) => {
+        return !(
+          (x === 1 && y == 1) ||
+          (x === 1 && y == 3) ||
+          (x === 3 && y == 1) ||
+          (x === 3 && y == 3)
+        );
+      })
+      .every((cell) => cell.letter !== null);
   }
 
   private determineWordsScores({

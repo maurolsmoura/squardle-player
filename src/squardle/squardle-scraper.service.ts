@@ -17,7 +17,7 @@ export class SquardleScraperService implements OnModuleInit {
   private readonly WAIT_FOR_ELEMENT_TIMEOUT = 10000;
 
   private browser: puppeteer.Browser | null = null;
-  private page: puppeteer.Page | null = null;
+  public page: puppeteer.Page | null = null;
 
   /**
    * Called when the module is initialized. Connects to browser on startup.
