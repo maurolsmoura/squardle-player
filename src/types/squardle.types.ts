@@ -13,6 +13,7 @@ export type Hint = {
 
 export type BoardStateResponse = {
   guessesRemaining: number;
+  nextGuessIndex: number;
   boardState: Cell[][];
 };
 

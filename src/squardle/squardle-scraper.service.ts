@@ -159,6 +159,46 @@ export class SquardleScraperService implements OnModuleInit {
   }
 
   /**
+   * Extracts the next guess index (column) from the columnMarker element.
+   */
+  private async extractNextGuessIndex(page: puppeteer.Page): Promise<number> {
+    const nextGuessIndex = await page.evaluate(() => {
+      const columnMarkerElement = document.getElementById('columnMarker');
+      if (!columnMarkerElement) return 0;
+
+      // Get the left position of the column marker
+      const markerStyle = window.getComputedStyle(columnMarkerElement);
+      const markerLeft = parseInt(markerStyle.left, 10);
+
+      // Get board positioning from squaresDiv
+      const boardElement = document.getElementById('squaresDiv');
+      if (!boardElement) return 0;
+
+      const boardStyle = window.getComputedStyle(boardElement);
+      const boardLeft = parseInt(boardStyle.left, 10);
+
+      // Get column width from the first table cell
+      const firstCell = document.getElementById('0_0');
+      if (!firstCell) return 0;
+
+      const cellStyle = window.getComputedStyle(firstCell);
+      const columnWidth = parseInt(cellStyle.width, 10);
+
+      // Calculate which column the marker is over
+      // Marker position relative to board start
+      const relativePosition = markerLeft - boardLeft;
+
+      // Calculate column index (marker points to center of column)
+      const columnIndex = Math.round(relativePosition / columnWidth);
+
+      // Ensure the index is within valid range (0-4)
+      return Math.max(0, Math.min(4, columnIndex));
+    });
+
+    return nextGuessIndex;
+  }
+
+  /**
    * Extracts the remaining guesses count from the page.
    */
   private async extractRemainingGuesses(page: puppeteer.Page): Promise<number> {
@@ -175,13 +215,16 @@ export class SquardleScraperService implements OnModuleInit {
   /**
    * Extracts the 5x5 board state from the loaded game page.
    */
-  private async extractBoardState(
-    page: puppeteer.Page,
-  ): Promise<{ guessesRemaining: number; boardState: any[][] }> {
+  private async extractBoardState(page: puppeteer.Page): Promise<{
+    guessesRemaining: number;
+    nextGuessIndex: number;
+    boardState: any[][];
+  }> {
     this.logger.log('Extracting board state from page');
 
-    // Extract guesses remaining and board state separately
+    // Extract all data separately for clean separation of concerns
     const guessesRemaining = await this.extractRemainingGuesses(page);
+    const nextGuessIndex = await this.extractNextGuessIndex(page);
 
     const boardState = await page.evaluate(() => {
       const board: any[][] = [];
@@ -312,11 +355,12 @@ export class SquardleScraperService implements OnModuleInit {
     });
 
     this.logger.log(
-      `Extracted board with ${boardState.length}x${boardState[0]?.length} cells and ${guessesRemaining} guesses remaining`,
+      `Extracted board with ${boardState.length}x${boardState[0]?.length} cells, ${guessesRemaining} guesses remaining, next guess at column ${nextGuessIndex}`,
     );
 
     return {
       guessesRemaining,
+      nextGuessIndex,
       boardState,
     };
   }
@@ -383,6 +427,7 @@ export class SquardleScraperService implements OnModuleInit {
       this.logger.log('Successfully extracted board state');
       return {
         guessesRemaining: result.guessesRemaining,
+        nextGuessIndex: result.nextGuessIndex,
         boardState: result.boardState as Cell[][],
       };
     } catch (error) {
