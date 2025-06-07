@@ -1,7 +1,10 @@
 import { Controller, Post, Get, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SquardleScraperService } from './squardle-scraper.service';
-import { SquardlePlayerService } from './squardle-player.service';
+import {
+  BestWordResult,
+  SquardlePlayerService,
+} from './squardle-player.service';
 import { BoardState } from '../types/squardle.types';
 
 /**
@@ -104,7 +107,7 @@ export class SquardleController {
     },
   })
   @ApiResponse({ status: 500, description: 'Failed to determine next guess' })
-  async getNextGuess(): Promise<{ nextGuess: string }> {
+  async getNextGuess(): Promise<BestWordResult> {
     this.logger.log('Determining next guess');
 
     try {
@@ -115,8 +118,8 @@ export class SquardleController {
       const nextGuess =
         this.squardlePlayerService.determineNextGuess(boardState);
 
-      this.logger.log(`Determined next guess: ${nextGuess}`);
-      return { nextGuess };
+      this.logger.log(`Determined next guess: ${nextGuess.word}`);
+      return nextGuess;
     } catch (error) {
       this.logger.error('Failed to determine next guess', error);
       throw error;
