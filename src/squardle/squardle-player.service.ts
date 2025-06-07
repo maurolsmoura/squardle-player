@@ -1,12 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { BoardState, Cell, HintType } from 'src/types/squardle.types';
-import { getWords } from 'words';
-import { orderBy } from 'lodash';
-
-enum WordsType {
-  Answers = 'answers',
-  All = 'all',
-}
+import { getWords, WordsType } from 'words';
+import { orderBy, cloneDeep } from 'lodash';
 
 const WORDS_TYPE = WordsType.Answers;
 
@@ -74,22 +69,91 @@ export class SquardlePlayerService {
       candidateWords,
       wordsFilter: wordsFilters.horizontal,
     });
+    const deepFilteredCandidateWordsHorizontal =
+      candidateWordsHorizontal.filter((word) =>
+        this.checkIfWordFits({
+          word,
+          direction: Direction.Horizontal,
+          boardState,
+          allCandidateWords: candidateWords,
+        }),
+      );
     const candidateWordsVertical = this.applyWordsFilter({
       candidateWords,
       wordsFilter: wordsFilters.vertical,
     });
-    if (
-      candidateWordsHorizontal.length === 0 ||
-      candidateWordsVertical.length === 0
-    ) {
-      // It means that any word will result in an invalid board.
+    const deepFilteredCandidateWordsVertical = candidateWordsVertical.filter(
+      (word) =>
+        this.checkIfWordFits({
+          word,
+          direction: Direction.Vertical,
+          boardState,
+          allCandidateWords: candidateWords,
+        }),
+    );
+    if (deepFilteredCandidateWordsHorizontal.length === 0) {
+      console.info(
+        `No candidate words for horizontal direction, index: ${boardState.nextGuessIndex} on following board state:`,
+      );
+      this.logBoardState(boardState);
+      return null;
+    }
+    if (deepFilteredCandidateWordsVertical.length === 0) {
+      console.info(
+        `No candidate words for vertical direction, index: ${boardState.nextGuessIndex} on following board state:`,
+      );
+      this.logBoardState(boardState);
       return null;
     }
     return this.determineBestWordOverall({
-      candidateWordsHorizontal,
-      candidateWordsVertical,
+      candidateWordsHorizontal: deepFilteredCandidateWordsHorizontal,
+      candidateWordsVertical: deepFilteredCandidateWordsVertical,
       boardState,
     });
+  }
+
+  private checkIfWordFits({
+    word,
+    direction,
+    boardState,
+    allCandidateWords,
+  }: {
+    word: string;
+    direction: Direction;
+    boardState: BoardState;
+    allCandidateWords: string[];
+  }): boolean {
+    const simulatedBoard = this.insertWordInBoard({
+      boardState,
+      word,
+      direction,
+    });
+    if (this.isBoardFull(simulatedBoard)) {
+      return true;
+    }
+    // Now we need to check if we can fill the board in other directions in all 3 indexes
+    const indexes = [0, 2, 4];
+    for (const index of indexes) {
+      const wordsFilters = this.createWordsFilters({
+        ...boardState,
+        board: simulatedBoard,
+        nextGuessIndex: index,
+        guessesRemaining: boardState.guessesRemaining - 1,
+      });
+      const filterToCheck =
+        direction === Direction.Horizontal
+          ? wordsFilters.vertical
+          : wordsFilters.horizontal;
+      const candidateWordsOppositeDirection = this.applyWordsFilter({
+        candidateWords: allCandidateWords,
+        wordsFilter: filterToCheck,
+      });
+
+      if (candidateWordsOppositeDirection.length === 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private getCurrentCells(boardState: BoardState): {
@@ -369,9 +433,9 @@ export class SquardlePlayerService {
       return bestWordScore[0];
     }
     // We will run a simulation to determine if the word is valid. We'll limit to 10 iterations
-    let simulatedBoard: BoardState['board'] = boardState.board;
+    let simulatedBoard: BoardState['board'] = cloneDeep(boardState.board);
     let currentGuessIndex = boardState.nextGuessIndex;
-    const maxIterations = 10;
+    const maxIterations = 6;
     for (const { word, confidence } of bestWordScore) {
       let simulationWord = {
         word,
@@ -379,9 +443,12 @@ export class SquardlePlayerService {
         direction,
       };
       // restart the simulation
-      simulatedBoard = boardState.board;
+      simulatedBoard = cloneDeep(boardState.board);
       currentGuessIndex = boardState.nextGuessIndex;
       let isValid = true;
+      console.log(
+        `Starting simulation for word: ${word} on index ${currentGuessIndex} ${simulationWord.direction}`,
+      );
       for (let i = 0; i < maxIterations; i++) {
         simulatedBoard = this.insertWordInBoard({
           boardState: {
@@ -409,9 +476,15 @@ export class SquardlePlayerService {
         });
         if (nextGuess === null) {
           // go to next word
+          console.info(
+            `Found invalid board. Stopping simulation for word: ${word} on index ${boardState.nextGuessIndex} ${simulationWord.direction}`,
+          );
           isValid = false;
           break;
         }
+        console.info(
+          `nextGuess: ${nextGuess?.word} confidence: ${nextGuess?.confidence}`,
+        );
         simulationWord = nextGuess;
       }
       if (isValid) {
@@ -431,22 +504,39 @@ export class SquardlePlayerService {
     direction: Direction;
   }): BoardState['board'] {
     const currentGuessIndex = boardState.nextGuessIndex;
-    if (![0, 2, 4].includes(currentGuessIndex)) {
-      throw new Error(
-        `Invalid current guess index when trying to insert word: ${currentGuessIndex}`,
-      );
-    }
+    this.logBoardState(boardState);
+    console.info(
+      `Inserting word: ${word} in direction: ${direction} on index: ${currentGuessIndex}`,
+    );
 
-    const newBoard = [...boardState.board];
+    const newBoard = cloneDeep(boardState.board);
     if (direction === Direction.Horizontal) {
       for (let i = 0; i < word.length; i++) {
-        boardState.board[currentGuessIndex][i].letter = word[i].toUpperCase();
+        const currentLetter = newBoard[currentGuessIndex][i].letter;
+        if (currentLetter !== null && currentLetter !== word[i].toUpperCase()) {
+          throw new Error(
+            `Conflict letter when trying to insert word: ${word} in direction: ${direction} on index: ${currentGuessIndex}`,
+          );
+        }
+        if (currentLetter === null) {
+          newBoard[currentGuessIndex][i].letter = word[i].toUpperCase();
+        }
       }
     } else {
       for (let i = 0; i < word.length; i++) {
-        boardState.board[i][currentGuessIndex].letter = word[i].toUpperCase();
+        const currentLetter = newBoard[i][currentGuessIndex].letter;
+        if (currentLetter !== null && currentLetter !== word[i].toUpperCase()) {
+          throw new Error(
+            `Conflict letter when trying to insert word: ${word} in direction: ${direction} on index: ${currentGuessIndex}`,
+          );
+        }
+        newBoard[i][currentGuessIndex].letter = word[i].toUpperCase();
       }
     }
+    this.logBoardState({
+      ...boardState,
+      board: newBoard,
+    });
     return newBoard;
   }
 
@@ -509,5 +599,11 @@ export class SquardlePlayerService {
     }
     const nextSequenceIndex = (currentSequenceIndex + 1) % guessSequence.length;
     return guessSequence[nextSequenceIndex];
+  }
+  private logBoardState(boardState: BoardState) {
+    // Write a nice board state to the console
+    for (const row of boardState.board) {
+      console.info(row.map((cell) => cell.letter ?? '_').join(' '));
+    }
   }
 }
