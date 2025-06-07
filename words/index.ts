@@ -1,6 +1,7 @@
 import { Language } from 'src/types/squardle.types';
 import { answersBr, wordsBr } from './pt-br';
 import { answersEn, wordsEn } from './en';
+import { BadRequestException } from '@nestjs/common';
 
 export enum WordsType {
   Answers = 'answers',
@@ -20,6 +21,6 @@ export const getWords = ({
     case Language.EN:
       return type === WordsType.Answers ? answersEn : wordsEn;
     default:
-      throw new Error(`Language ${language} not supported`);
+      throw new BadRequestException(`Language ${language} not supported`);
   }
 };
