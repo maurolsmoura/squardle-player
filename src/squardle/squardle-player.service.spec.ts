@@ -46,11 +46,12 @@ describe('SquardlePlayerService', () => {
         };
 
         // Act
-        const result = service.determineNextGuess(initialBoardState);
+        const result = service.playNextGuess(initialBoardState);
 
         // Assert
-        expect(result.word.length).toBe(5);
-        expect(result.confidence).toBeGreaterThan(0);
+        expect(result).not.toBeNull();
+        expect(result!.word.length).toBe(5);
+        expect(result!.confidence).toBeGreaterThan(0);
       });
     });
 
@@ -79,11 +80,12 @@ describe('SquardlePlayerService', () => {
         };
 
         // Act
-        const result = service.determineNextGuess(boardStateWithHints);
+        const result = service.playNextGuess(boardStateWithHints);
 
         // Assert
-        expect(result.word).toBeDefined();
-        expect(result.confidence).toBeGreaterThanOrEqual(0);
+        expect(result).not.toBeNull();
+        expect(result!.word).toBeDefined();
+        expect(result!.confidence).toBeGreaterThanOrEqual(0);
       });
     });
   });

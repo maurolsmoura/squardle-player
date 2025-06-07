@@ -1,12 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { BoardState, Cell, HintType } from 'src/types/squardle.types';
 import { getWords } from 'words';
+import { orderBy } from 'lodash';
 
-const WORDS_TYPE = 'answers';
+enum WordsType {
+  Answers = 'answers',
+  All = 'all',
+}
 
-export interface BestWordResult {
+const WORDS_TYPE = WordsType.Answers;
+
+export interface WordScoreResult {
   word: string;
   confidence: number;
+}
+
+export interface WordScoreResultDirection extends WordScoreResult {
+  direction: Direction;
+}
+
+export enum Direction {
+  Horizontal = 'horizontal',
+  Vertical = 'vertical',
 }
 
 interface LetterIndex {
@@ -23,26 +38,53 @@ interface WordsFilter {
 
 @Injectable()
 export class SquardlePlayerService {
-  determineNextGuess(boardState: BoardState): BestWordResult {
+  playNextGuess(boardState: BoardState): WordScoreResult | null {
     const isInitialState = boardState.board.every((row) =>
       row.every((cell) => cell.hints.length === 0),
     );
-    const totalWords = getWords({
+    if (isInitialState) {
+      const totalWords = getWords({
+        language: boardState.language,
+        type: WordsType.Answers,
+      });
+      const wordScores = this.determineWordsScores({
+        candidateWords: totalWords,
+      });
+      return wordScores[0];
+    }
+    if (this.isBoardFull(boardState.board)) {
+      return null;
+    }
+    return this.returnNextGuess({
+      boardState,
+    });
+  }
+
+  private returnNextGuess({
+    boardState,
+  }: {
+    boardState: BoardState;
+  }): WordScoreResultDirection | null {
+    const candidateWords = getWords({
       language: boardState.language,
       type: WORDS_TYPE,
     });
-    if (isInitialState) {
-      return this.determineBestWord({ candidateWords: totalWords });
-    }
     const wordsFilters = this.createWordsFilters(boardState);
     const candidateWordsHorizontal = this.applyWordsFilter({
-      totalWords,
+      candidateWords,
       wordsFilter: wordsFilters.horizontal,
     });
     const candidateWordsVertical = this.applyWordsFilter({
-      totalWords,
+      candidateWords,
       wordsFilter: wordsFilters.vertical,
     });
+    if (
+      candidateWordsHorizontal.length === 0 ||
+      candidateWordsVertical.length === 0
+    ) {
+      // It means that any word will result in an invalid board.
+      return null;
+    }
     return this.determineBestWordOverall({
       candidateWordsHorizontal,
       candidateWordsVertical,
@@ -50,8 +92,7 @@ export class SquardlePlayerService {
     });
   }
 
-  private getCurrentIndexAndCells(boardState: BoardState): {
-    index: number;
+  private getCurrentCells(boardState: BoardState): {
     cells: {
       vertical: Cell[];
       horizontal: Cell[];
@@ -67,7 +108,6 @@ export class SquardlePlayerService {
         .sort((a, b) => a.x - b.x),
     };
     return {
-      index: currentGuessIndex,
       cells: currentGuessCells,
     };
   }
@@ -76,18 +116,17 @@ export class SquardlePlayerService {
     horizontal: WordsFilter;
     vertical: WordsFilter;
   } {
-    const { cells: currentGuessCells } =
-      this.getCurrentIndexAndCells(boardState);
+    const { cells: currentGuessCells } = this.getCurrentCells(boardState);
 
     return {
       horizontal: this.createWordFilter({
         cells: currentGuessCells.horizontal,
-        direction: 'horizontal',
+        direction: Direction.Horizontal,
         boardState,
       }),
       vertical: this.createWordFilter({
         cells: currentGuessCells.vertical,
-        direction: 'vertical',
+        direction: Direction.Vertical,
         boardState,
       }),
     };
@@ -99,7 +138,7 @@ export class SquardlePlayerService {
     boardState,
   }: {
     cells: Cell[];
-    direction: 'horizontal' | 'vertical';
+    direction: Direction;
     boardState: BoardState;
   }): WordsFilter {
     const includes: string[] = [];
@@ -128,7 +167,7 @@ export class SquardlePlayerService {
           case HintType.HorizontalSimple:
           case HintType.HorizontalDouble:
           case HintType.HorizontalTriple:
-            if (direction === 'horizontal') {
+            if (direction === Direction.Horizontal) {
               // Letter must be in the word but not at this position
               includes.push(letter);
               excludingPositions.push({ index, letter });
@@ -141,7 +180,7 @@ export class SquardlePlayerService {
           case HintType.VerticalSimple:
           case HintType.VerticalDouble:
           case HintType.VerticalTriple:
-            if (direction === 'vertical') {
+            if (direction === Direction.Vertical) {
               // Letter must be in the word but not at this position
               includes.push(letter);
               excludingPositions.push({ index, letter });
@@ -191,13 +230,14 @@ export class SquardlePlayerService {
   }
 
   private applyWordsFilter({
-    totalWords,
+    candidateWords,
     wordsFilter,
   }: {
-    totalWords: string[];
+    candidateWords: string[];
     wordsFilter: WordsFilter;
   }): string[] {
-    return totalWords.filter((word) => {
+    const words = [...candidateWords];
+    return words.filter((word) => {
       // Check matching letters
       const hasMatchingLetters = wordsFilter.matchingLetters.every(
         ({ index, letter }) =>
@@ -236,9 +276,8 @@ export class SquardlePlayerService {
     candidateWordsHorizontal: string[];
     candidateWordsVertical: string[];
     boardState: BoardState;
-  }): BestWordResult {
-    const { cells: currentGuessCells } =
-      this.getCurrentIndexAndCells(boardState);
+  }): WordScoreResultDirection | null {
+    const { cells: currentGuessCells } = this.getCurrentCells(boardState);
 
     const missingLetters = {
       horizontal: currentGuessCells.horizontal.filter(
@@ -251,50 +290,177 @@ export class SquardlePlayerService {
 
     // We'll prioritize the word with the most missing letters
     if (missingLetters.horizontal > missingLetters.vertical) {
-      return this.determineBestWord({
+      const bestHorizontalWord = this.determineBestWord({
         candidateWords: candidateWordsHorizontal,
+        boardState,
+        direction: Direction.Horizontal,
       });
-    } else if (missingLetters.horizontal < missingLetters.vertical) {
-      return this.determineBestWord({
+      if (bestHorizontalWord !== null) {
+        return {
+          ...bestHorizontalWord,
+          direction: Direction.Horizontal,
+        };
+      }
+    }
+    if (missingLetters.horizontal < missingLetters.vertical) {
+      const bestVerticalWord = this.determineBestWord({
         candidateWords: candidateWordsVertical,
+        boardState,
+        direction: Direction.Vertical,
       });
-    }
-
-    // If the number of missing letters is the same, we need to determine the best word overall
-
-    const bestWordHorizontal = this.determineBestWord({
-      candidateWords: candidateWordsHorizontal,
-    });
-    const bestWordVertical = this.determineBestWord({
-      candidateWords: candidateWordsVertical,
-    });
-
-    const candidates = [bestWordHorizontal, bestWordVertical].filter(
-      (result): result is BestWordResult => result !== null,
-    );
-
-    if (candidates.length === 0) {
-      return { word: '', confidence: 0 };
-    }
-
-    // Find the candidate with the highest confidence manually
-    let bestResult = candidates[0];
-    for (const candidate of candidates) {
-      if (candidate.confidence > bestResult.confidence) {
-        bestResult = candidate;
+      if (bestVerticalWord !== null) {
+        return {
+          ...bestVerticalWord,
+          direction: Direction.Vertical,
+        };
       }
     }
 
-    return bestResult;
+    // If the number of missing letters is the same, we return the best word overall
+    const bestWordHorizontal = this.determineBestWord({
+      candidateWords: candidateWordsHorizontal,
+      boardState,
+      direction: Direction.Horizontal,
+    });
+    const bestWordVertical = this.determineBestWord({
+      candidateWords: candidateWordsVertical,
+      boardState,
+      direction: Direction.Vertical,
+    });
+    if (bestWordHorizontal === null && bestWordVertical === null) {
+      return null;
+    }
+    const bestResultDirection =
+      (bestWordHorizontal?.confidence ?? 0) >
+      (bestWordVertical?.confidence ?? 0)
+        ? Direction.Horizontal
+        : Direction.Vertical;
+    const bestResult =
+      bestResultDirection === Direction.Horizontal
+        ? bestWordHorizontal
+        : bestWordVertical;
+    return {
+      ...bestResult!,
+      direction: bestResultDirection,
+    };
+  }
+
+  private flipDirection(direction: Direction): Direction {
+    return direction === Direction.Horizontal
+      ? Direction.Vertical
+      : Direction.Horizontal;
   }
 
   private determineBestWord({
     candidateWords,
+    boardState,
+    direction,
   }: {
     candidateWords: string[];
-  }): BestWordResult {
+    boardState: BoardState;
+    direction: Direction;
+  }): WordScoreResult | null {
+    const bestWordScore = this.determineWordsScores({ candidateWords });
+    if (bestWordScore.length === 0) {
+      return null;
+    }
+    if (bestWordScore[0].confidence === 1) {
+      // It means we are 100% sure about the word. No need to simulate more
+      return bestWordScore[0];
+    }
+    // We will run a simulation to determine if the word is valid. We'll limit to 10 iterations
+    let simulatedBoard: BoardState['board'] = boardState.board;
+    let currentGuessIndex = boardState.nextGuessIndex;
+    const maxIterations = 10;
+    for (const { word, confidence } of bestWordScore) {
+      let simulationWord = {
+        word,
+        confidence,
+        direction,
+      };
+      // restart the simulation
+      simulatedBoard = boardState.board;
+      currentGuessIndex = boardState.nextGuessIndex;
+      let isValid = true;
+      for (let i = 0; i < maxIterations; i++) {
+        simulatedBoard = this.insertWordInBoard({
+          boardState: {
+            language: boardState.language,
+            guessesRemaining: boardState.guessesRemaining,
+            nextGuessIndex: currentGuessIndex,
+            board: simulatedBoard,
+          },
+          word: simulationWord.word,
+          direction: simulationWord.direction,
+        });
+        if (this.isBoardFull(simulatedBoard)) {
+          // No need to simulate more. This word is valid.
+          return { word, confidence };
+        }
+        currentGuessIndex = this.getNextIndex(currentGuessIndex);
+        const newBoardState = {
+          language: boardState.language,
+          guessesRemaining: boardState.guessesRemaining - i - 1,
+          nextGuessIndex: currentGuessIndex,
+          board: simulatedBoard,
+        };
+        const nextGuess = this.returnNextGuess({
+          boardState: newBoardState,
+        });
+        if (nextGuess === null) {
+          // go to next word
+          isValid = false;
+          break;
+        }
+        simulationWord = nextGuess;
+      }
+      if (isValid) {
+        return { word, confidence };
+      }
+    }
+    return null;
+  }
+
+  private insertWordInBoard({
+    boardState,
+    word,
+    direction,
+  }: {
+    boardState: BoardState;
+    word: string;
+    direction: Direction;
+  }): BoardState['board'] {
+    const currentGuessIndex = boardState.nextGuessIndex;
+    if (![0, 2, 4].includes(currentGuessIndex)) {
+      throw new Error(
+        `Invalid current guess index when trying to insert word: ${currentGuessIndex}`,
+      );
+    }
+
+    const newBoard = [...boardState.board];
+    if (direction === Direction.Horizontal) {
+      for (let i = 0; i < word.length; i++) {
+        boardState.board[currentGuessIndex][i].letter = word[i].toUpperCase();
+      }
+    } else {
+      for (let i = 0; i < word.length; i++) {
+        boardState.board[i][currentGuessIndex].letter = word[i].toUpperCase();
+      }
+    }
+    return newBoard;
+  }
+
+  private isBoardFull(board: BoardState['board']): boolean {
+    return board.every((row) => row.every((cell) => cell.letter !== null));
+  }
+
+  private determineWordsScores({
+    candidateWords,
+  }: {
+    candidateWords: string[];
+  }): WordScoreResult[] {
     if (!candidateWords || candidateWords.length === 0) {
-      return { word: '', confidence: 0 };
+      return [];
     }
 
     const totalWords = candidateWords.length;
@@ -323,20 +489,25 @@ export class SquardlePlayerService {
     }
 
     // Find the word with the highest score
-    let bestWord = candidateWords[0];
-    let bestScore = 0;
-    for (const word of candidateWords) {
+    const wordsScores = candidateWords.map((word) => {
       const score = word.split('').reduce((acc, letter, index) => {
         return acc + (statistics.get(index)?.get(letter) ?? 0);
       }, 0);
-      if (score > bestScore) {
-        bestWord = word;
-        bestScore = score;
-      }
+      return {
+        word,
+        confidence: score / (totalWords * wordLength),
+      };
+    });
+    return orderBy(wordsScores, (word) => word.confidence, 'desc');
+  }
+
+  private getNextIndex(currentGuessIndex: number): number {
+    const guessSequence = [0, 2, 4];
+    const currentSequenceIndex = guessSequence.indexOf(currentGuessIndex);
+    if (currentSequenceIndex === -1) {
+      throw new Error(`Invalid current guess index: ${currentGuessIndex}`);
     }
-    return {
-      word: bestWord,
-      confidence: bestScore / (totalWords * wordLength),
-    };
+    const nextSequenceIndex = (currentSequenceIndex + 1) % guessSequence.length;
+    return guessSequence[nextSequenceIndex];
   }
 }

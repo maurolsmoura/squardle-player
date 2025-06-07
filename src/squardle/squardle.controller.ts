@@ -1,8 +1,14 @@
-import { Controller, Post, Get, Logger } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Logger,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { SquardleScraperService } from './squardle-scraper.service';
 import {
-  BestWordResult,
+  WordScoreResult,
   SquardlePlayerService,
 } from './squardle-player.service';
 import { BoardState } from '../types/squardle.types';
@@ -107,7 +113,7 @@ export class SquardleController {
     },
   })
   @ApiResponse({ status: 500, description: 'Failed to determine next guess' })
-  async getNextGuess(): Promise<BestWordResult> {
+  async getNextGuess(): Promise<WordScoreResult> {
     this.logger.log('Determining next guess');
 
     try {
@@ -115,9 +121,12 @@ export class SquardleController {
       const boardState = await this.squardleScraperService.getBoardState();
 
       // Use the player service to determine next guess
-      const nextGuess =
-        this.squardlePlayerService.determineNextGuess(boardState);
-
+      const nextGuess = this.squardlePlayerService.playNextGuess(boardState);
+      if (nextGuess === null) {
+        throw new UnprocessableEntityException(
+          'No next guess found. The board is full or invalid',
+        );
+      }
       this.logger.log(`Determined next guess: ${nextGuess.word}`);
       return nextGuess;
     } catch (error) {

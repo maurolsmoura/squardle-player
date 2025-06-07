@@ -347,6 +347,12 @@ export class SquardleScraperService implements OnModuleInit {
         for (let y = 0; y < 5; y++) {
           // Check if this is a valid gameplay cell
           if (!isValidCell(x, y)) {
+            row.push({
+              x: y,
+              y: x,
+              letter: null,
+              hints: [],
+            });
             continue;
           }
 
