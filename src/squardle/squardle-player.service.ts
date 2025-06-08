@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { BoardState, Cell, HintType } from 'src/types/squardle.types';
+import { BoardState, Cell, HintType, Language } from 'src/types/squardle.types';
 import { getWords, WordsType } from 'words';
 import { orderBy, cloneDeep } from 'lodash';
 
 const WORDS_TYPE = WordsType.Answers;
+const GUESS_SEQUENCE = [0, 2, 4];
+const MAX_SIMULATION_ITERATIONS = 6;
 
 export interface WordScoreResult {
   word: string;
@@ -25,161 +27,318 @@ interface LetterIndex {
 }
 
 interface WordsFilter {
-  includes: string[]; // letters that must be in the word
-  excludes: string[]; // letters that must not be in the word
-  excludingPositions: LetterIndex[]; // letters that must not be in the word at a specific position
-  matchingLetters: LetterIndex[]; // letters that must be in the word at a specific position
+  includes: string[];
+  excludes: string[];
+  excludingPositions: LetterIndex[];
+  matchingLetters: LetterIndex[];
+}
+
+interface WordFitCheckParams {
+  word: string;
+  direction: Direction;
+  boardState: BoardState;
+  allCandidateWords: string[];
+}
+
+interface WordInsertionParams {
+  boardState: BoardState;
+  word: string;
+  direction: Direction;
+}
+
+interface WordFilterCreationParams {
+  cells: Cell[];
+  direction: Direction;
+  boardState: BoardState;
+}
+
+interface BestWordDeterminationParams {
+  candidateWordsHorizontal: string[];
+  candidateWordsVertical: string[];
+  boardState: BoardState;
+}
+
+interface WordScoreCalculationParams {
+  candidateWords: string[];
+  boardState?: BoardState;
+  direction?: Direction;
+}
+
+interface SimulationParams {
+  candidateWords: WordScoreResult[];
+  boardState: BoardState;
+  direction: Direction;
 }
 
 @Injectable()
 export class SquardlePlayerService {
   playNextGuess(boardState: BoardState): WordScoreResult | null {
-    const isInitialState = boardState.board.every((row) =>
-      row.every((cell) => cell.hints.length === 0),
-    );
-    if (isInitialState) {
-      const totalWords = getWords({
-        language: boardState.language,
-        type: WordsType.Answers,
-      });
-      const wordScores = this.determineWordsScores({
-        candidateWords: totalWords,
-      });
-      return wordScores[0];
+    if (this.isBoardInInitialState(boardState)) {
+      return this.getInitialGuess(boardState);
     }
+
     if (this.isBoardFull(boardState.board)) {
       return null;
     }
-    return this.returnNextGuess({
+
+    return this.calculateNextGuess(boardState);
+  }
+
+  private isBoardInInitialState(boardState: BoardState): boolean {
+    return boardState.board.every((row) =>
+      row.every((cell) => cell.hints.length === 0),
+    );
+  }
+
+  private getInitialGuess(boardState: BoardState): WordScoreResult {
+    const allWords = this.getAllWords(boardState.language);
+    const wordScores = this.calculateWordsScores({ candidateWords: allWords });
+    return wordScores[0];
+  }
+
+  private getAllWords(language: Language): string[] {
+    return getWords({
+      language,
+      type: WORDS_TYPE,
+    });
+  }
+
+  private calculateNextGuess(
+    boardState: BoardState,
+  ): WordScoreResultDirection | null {
+    const candidateWords = this.getAllWords(boardState.language);
+    const filteredCandidates = this.getFilteredCandidateWords({
+      boardState,
+      candidateWords,
+    });
+
+    if (!this.areCandidatesValid(filteredCandidates, boardState)) {
+      return null;
+    }
+
+    return this.selectBestWordOverall({
+      candidateWordsHorizontal: filteredCandidates.horizontal,
+      candidateWordsVertical: filteredCandidates.vertical,
       boardState,
     });
   }
 
-  private returnNextGuess({
-    boardState,
-  }: {
+  private getFilteredCandidateWords(params: {
     boardState: BoardState;
-  }): WordScoreResultDirection | null {
-    const candidateWords = getWords({
-      language: boardState.language,
-      type: WORDS_TYPE,
-    });
+    candidateWords: string[];
+  }) {
+    const { boardState, candidateWords } = params;
     const wordsFilters = this.createWordsFilters(boardState);
-    const candidateWordsHorizontal = this.applyWordsFilter({
+
+    const horizontalCandidates = this.applyWordsFilter({
       candidateWords,
       wordsFilter: wordsFilters.horizontal,
     });
-    const deepFilteredCandidateWordsHorizontal =
-      candidateWordsHorizontal.filter((word) =>
-        this.checkIfWordFits({
-          word,
-          direction: Direction.Horizontal,
-          boardState,
-          allCandidateWords: candidateWords,
-        }),
-      );
-    const candidateWordsVertical = this.applyWordsFilter({
+
+    const verticalCandidates = this.applyWordsFilter({
       candidateWords,
       wordsFilter: wordsFilters.vertical,
     });
-    const deepFilteredCandidateWordsVertical = candidateWordsVertical.filter(
-      (word) =>
-        this.checkIfWordFits({
-          word,
-          direction: Direction.Vertical,
-          boardState,
-          allCandidateWords: candidateWords,
-        }),
-    );
-    if (deepFilteredCandidateWordsHorizontal.length === 0) {
-      console.info(
-        `No candidate words for horizontal direction, index: ${boardState.nextGuessIndex} on following board state:`,
-      );
-      this.logBoardState(boardState);
-      return null;
-    }
-    if (deepFilteredCandidateWordsVertical.length === 0) {
-      console.info(
-        `No candidate words for vertical direction, index: ${boardState.nextGuessIndex} on following board state:`,
-      );
-      this.logBoardState(boardState);
-      return null;
-    }
-    return this.determineBestWordOverall({
-      candidateWordsHorizontal: deepFilteredCandidateWordsHorizontal,
-      candidateWordsVertical: deepFilteredCandidateWordsVertical,
-      boardState,
-    });
+
+    return {
+      horizontal: this.getDeepFilteredCandidates({
+        candidates: horizontalCandidates,
+        direction: Direction.Horizontal,
+        boardState,
+        allCandidateWords: candidateWords,
+      }),
+      vertical: this.getDeepFilteredCandidates({
+        candidates: verticalCandidates,
+        direction: Direction.Vertical,
+        boardState,
+        allCandidateWords: candidateWords,
+      }),
+    };
   }
 
-  private checkIfWordFits({
-    word,
-    direction,
-    boardState,
-    allCandidateWords,
-  }: {
-    word: string;
+  private getDeepFilteredCandidates(params: {
+    candidates: string[];
     direction: Direction;
     boardState: BoardState;
     allCandidateWords: string[];
-  }): boolean {
+  }): string[] {
+    const { candidates, direction, boardState, allCandidateWords } = params;
+
+    return candidates.filter((word) =>
+      this.checkIfWordFits({
+        word,
+        direction,
+        boardState,
+        allCandidateWords,
+      }),
+    );
+  }
+
+  private areCandidatesValid(
+    filteredCandidates: { horizontal: string[]; vertical: string[] },
+    boardState: BoardState,
+  ): boolean {
+    const { horizontal, vertical } = filteredCandidates;
+
+    if (horizontal.length === 0) {
+      this.logNoCandidatesFound('horizontal', boardState);
+      return false;
+    }
+
+    if (vertical.length === 0) {
+      this.logNoCandidatesFound('vertical', boardState);
+      return false;
+    }
+
+    return true;
+  }
+
+  private logNoCandidatesFound(
+    direction: string,
+    boardState: BoardState,
+  ): void {
+    console.info(
+      `No candidate words for ${direction} direction, index: ${boardState.nextGuessIndex} on following board state:`,
+    );
+    this.logBoardState(boardState);
+  }
+
+  private checkIfWordFits(params: WordFitCheckParams): boolean {
+    const { word, direction, boardState, allCandidateWords } = params;
     const simulatedBoard = this.insertWordInBoard({
       boardState,
       word,
       direction,
     });
+
     if (this.isBoardFull(simulatedBoard)) {
       return true;
     }
-    // Now we need to check if we can fill the board in other directions in all 3 indexes
-    const indexes = [0, 2, 4];
-    for (const index of indexes) {
-      const wordsFilters = this.createWordsFilters({
-        ...boardState,
-        board: simulatedBoard,
-        nextGuessIndex: index,
-        guessesRemaining: boardState.guessesRemaining - 1,
-      });
-      const filterToCheck =
-        direction === Direction.Horizontal
-          ? wordsFilters.vertical
-          : wordsFilters.horizontal;
-      const candidateWordsOppositeDirection = this.applyWordsFilter({
-        candidateWords: allCandidateWords,
-        wordsFilter: filterToCheck,
-      });
 
-      if (candidateWordsOppositeDirection.length === 0) {
+    return this.canFillRemainingPositions({
+      simulatedBoard,
+      originalBoardState: boardState,
+      direction,
+      allCandidateWords,
+    });
+  }
+
+  private canFillRemainingPositions(params: {
+    simulatedBoard: BoardState['board'];
+    originalBoardState: BoardState;
+    direction: Direction;
+    allCandidateWords: string[];
+  }): boolean {
+    const { simulatedBoard, originalBoardState, direction, allCandidateWords } =
+      params;
+
+    for (const index of GUESS_SEQUENCE) {
+      if (
+        !this.canFillPositionAtIndex({
+          simulatedBoard,
+          originalBoardState,
+          direction,
+          allCandidateWords,
+          index,
+        })
+      ) {
         return false;
       }
     }
+
     return true;
   }
 
-  private getCurrentCells(boardState: BoardState): {
-    cells: {
-      vertical: Cell[];
-      horizontal: Cell[];
-    };
-  } {
-    const currentGuessIndex = boardState.nextGuessIndex;
-    const currentGuessCells = {
-      vertical: boardState.board
-        .flatMap((row) => row.filter((cell) => cell.x === currentGuessIndex))
-        .sort((a, b) => a.y - b.y),
-      horizontal: boardState.board
-        .flatMap((row) => row.filter((cell) => cell.y === currentGuessIndex))
-        .sort((a, b) => a.x - b.x),
-    };
+  private canFillPositionAtIndex(params: {
+    simulatedBoard: BoardState['board'];
+    originalBoardState: BoardState;
+    direction: Direction;
+    allCandidateWords: string[];
+    index: number;
+  }): boolean {
+    const {
+      simulatedBoard,
+      originalBoardState,
+      direction,
+      allCandidateWords,
+      index,
+    } = params;
+
+    const testBoardState = this.createTestBoardState({
+      originalBoardState,
+      simulatedBoard,
+      index,
+    });
+
+    const wordsFilters = this.createWordsFilters(testBoardState);
+    const oppositeDirection = this.getOppositeDirection(direction);
+    const filterToCheck =
+      oppositeDirection === Direction.Horizontal
+        ? wordsFilters.horizontal
+        : wordsFilters.vertical;
+
+    const candidatesForOppositeDirection = this.applyWordsFilter({
+      candidateWords: allCandidateWords,
+      wordsFilter: filterToCheck,
+    });
+
+    return candidatesForOppositeDirection.length > 0;
+  }
+
+  private createTestBoardState(params: {
+    originalBoardState: BoardState;
+    simulatedBoard: BoardState['board'];
+    index: number;
+  }): BoardState {
+    const { originalBoardState, simulatedBoard, index } = params;
+
     return {
-      cells: currentGuessCells,
+      ...originalBoardState,
+      board: simulatedBoard,
+      nextGuessIndex: index,
+      guessesRemaining: originalBoardState.guessesRemaining - 1,
     };
   }
 
-  private createWordsFilters(boardState: BoardState): {
-    horizontal: WordsFilter;
-    vertical: WordsFilter;
-  } {
+  private getOppositeDirection(direction: Direction): Direction {
+    return direction === Direction.Horizontal
+      ? Direction.Vertical
+      : Direction.Horizontal;
+  }
+
+  private getCurrentCells(boardState: BoardState) {
+    const currentGuessIndex = boardState.nextGuessIndex;
+
+    return {
+      cells: {
+        horizontal: this.getHorizontalCells(
+          boardState.board,
+          currentGuessIndex,
+        ),
+        vertical: this.getVerticalCells(boardState.board, currentGuessIndex),
+      },
+    };
+  }
+
+  private getHorizontalCells(
+    board: BoardState['board'],
+    guessIndex: number,
+  ): Cell[] {
+    return board
+      .flatMap((row) => row.filter((cell) => cell.y === guessIndex))
+      .sort((a, b) => a.x - b.x);
+  }
+
+  private getVerticalCells(
+    board: BoardState['board'],
+    guessIndex: number,
+  ): Cell[] {
+    return board
+      .flatMap((row) => row.filter((cell) => cell.x === guessIndex))
+      .sort((a, b) => a.y - b.y);
+  }
+
+  private createWordsFilters(boardState: BoardState) {
     const { cells: currentGuessCells } = this.getCurrentCells(boardState);
 
     return {
@@ -196,417 +355,749 @@ export class SquardlePlayerService {
     };
   }
 
-  private createWordFilter({
-    cells,
-    direction,
-    boardState,
-  }: {
-    cells: Cell[];
-    direction: Direction;
-    boardState: BoardState;
-  }): WordsFilter {
-    const includes: string[] = [];
-    const excludes: string[] = [];
-    const excludingPositions: { index: number; letter: string }[] = [];
+  private createWordFilter(params: WordFilterCreationParams): WordsFilter {
+    const { cells, direction, boardState } = params;
+    const blackLetters = this.extractBlackLetters(boardState);
 
-    // Get all black letters from the entire board
-    const blackLetters = boardState.board
+    const filterComponents = this.extractFilterComponents({ cells, direction });
+
+    return {
+      includes: this.removeDuplicates(filterComponents.includes),
+      excludes: this.removeDuplicates([
+        ...blackLetters,
+        ...filterComponents.excludes,
+      ]),
+      excludingPositions: filterComponents.excludingPositions,
+      matchingLetters: this.extractMatchingLetters(cells),
+    };
+  }
+
+  private extractBlackLetters(boardState: BoardState): string[] {
+    return boardState.board
       .flatMap((row) => row.flatMap((cell) => cell.hints))
       .filter((hint) => hint.type === HintType.Black)
       .map((hint) => hint.letter);
+  }
 
-    // Add black letters to excludes
-    excludes.push(...blackLetters);
+  private extractFilterComponents(params: {
+    cells: Cell[];
+    direction: Direction;
+  }) {
+    const { cells, direction } = params;
+    const includes: string[] = [];
+    const excludes: string[] = [];
+    const excludingPositions: LetterIndex[] = [];
 
-    // Analyze each cell in the current word
     cells.forEach((cell, index) => {
       cell.hints.forEach((hint) => {
-        const { letter, type } = hint;
-
-        switch (type) {
-          case HintType.Green:
-            // Green letters are already in correct position, no filtering needed
-            break;
-
-          case HintType.HorizontalSimple:
-          case HintType.HorizontalDouble:
-          case HintType.HorizontalTriple:
-            if (direction === Direction.Horizontal) {
-              // Letter must be in the word but not at this position
-              includes.push(letter);
-              excludingPositions.push({ index, letter });
-            } else {
-              // Letter must not be in vertical word
-              excludes.push(letter);
-            }
-            break;
-
-          case HintType.VerticalSimple:
-          case HintType.VerticalDouble:
-          case HintType.VerticalTriple:
-            if (direction === Direction.Vertical) {
-              // Letter must be in the word but not at this position
-              includes.push(letter);
-              excludingPositions.push({ index, letter });
-            } else {
-              // Letter must not be in horizontal word
-              excludes.push(letter);
-            }
-            break;
-
-          case HintType.OrangeSimpleVerticalSimpleHorizontal:
-          case HintType.OrangeDoubleVerticalSimpleHorizontal:
-          case HintType.OrangeTripleVerticalSimpleHorizontal:
-          case HintType.OrangeSimpleVerticalDoubleHorizontal:
-          case HintType.OrangeDoubleVerticalDoubleHorizontal:
-          case HintType.OrangeTripleVerticalDoubleHorizontal:
-          case HintType.OrangeSimpleVerticalTripleHorizontal:
-          case HintType.OrangeDoubleVerticalTripleHorizontal:
-          case HintType.OrangeTripleVerticalTripleHorizontal:
-            // Letter must be in the word but not at this position
-            includes.push(letter);
-            excludingPositions.push({ index, letter });
-            break;
-
-          case HintType.White:
-            // Letter is not in this row/column
-            excludes.push(letter);
-            break;
-
-          case HintType.Black:
-            // Already handled above
-            break;
-        }
+        this.processHintForFilter({
+          hint,
+          direction,
+          index,
+          includes,
+          excludes,
+          excludingPositions,
+        });
       });
     });
 
-    return {
-      includes: [...new Set(includes)], // Remove duplicates
-      excludes: [...new Set(excludes)], // Remove duplicates
-      excludingPositions,
-      matchingLetters: cells
-        .map((cell, index) => ({
-          index,
-          letter: cell.letter,
-        }))
-        .filter(({ letter }) => letter !== null) as LetterIndex[],
-    };
+    return { includes, excludes, excludingPositions };
   }
 
-  private applyWordsFilter({
-    candidateWords,
-    wordsFilter,
-  }: {
+  private processHintForFilter(params: {
+    hint: { letter: string; type: HintType };
+    direction: Direction;
+    index: number;
+    includes: string[];
+    excludes: string[];
+    excludingPositions: LetterIndex[];
+  }): void {
+    const { hint, direction, index, includes, excludes, excludingPositions } =
+      params;
+    const { letter, type } = hint;
+
+    switch (type) {
+      case HintType.Green:
+        break;
+
+      case HintType.HorizontalSimple:
+      case HintType.HorizontalDouble:
+      case HintType.HorizontalTriple:
+        this.processHorizontalHint({
+          letter,
+          index,
+          direction,
+          includes,
+          excludes,
+          excludingPositions,
+        });
+        break;
+
+      case HintType.VerticalSimple:
+      case HintType.VerticalDouble:
+      case HintType.VerticalTriple:
+        this.processVerticalHint({
+          letter,
+          index,
+          direction,
+          includes,
+          excludes,
+          excludingPositions,
+        });
+        break;
+
+      case HintType.OrangeSimpleVerticalSimpleHorizontal:
+      case HintType.OrangeDoubleVerticalSimpleHorizontal:
+      case HintType.OrangeTripleVerticalSimpleHorizontal:
+      case HintType.OrangeSimpleVerticalDoubleHorizontal:
+      case HintType.OrangeDoubleVerticalDoubleHorizontal:
+      case HintType.OrangeTripleVerticalDoubleHorizontal:
+      case HintType.OrangeSimpleVerticalTripleHorizontal:
+      case HintType.OrangeDoubleVerticalTripleHorizontal:
+      case HintType.OrangeTripleVerticalTripleHorizontal:
+        this.processOrangeHint({ letter, index, includes, excludingPositions });
+        break;
+
+      case HintType.White:
+        excludes.push(letter);
+        break;
+
+      case HintType.Black:
+        break;
+    }
+  }
+
+  private processHorizontalHint(params: {
+    letter: string;
+    index: number;
+    direction: Direction;
+    includes: string[];
+    excludes: string[];
+    excludingPositions: LetterIndex[];
+  }): void {
+    const { letter, index, direction, includes, excludes, excludingPositions } =
+      params;
+
+    if (direction === Direction.Horizontal) {
+      includes.push(letter);
+      excludingPositions.push({ index, letter });
+    } else {
+      excludes.push(letter);
+    }
+  }
+
+  private processVerticalHint(params: {
+    letter: string;
+    index: number;
+    direction: Direction;
+    includes: string[];
+    excludes: string[];
+    excludingPositions: LetterIndex[];
+  }): void {
+    const { letter, index, direction, includes, excludes, excludingPositions } =
+      params;
+
+    if (direction === Direction.Vertical) {
+      includes.push(letter);
+      excludingPositions.push({ index, letter });
+    } else {
+      excludes.push(letter);
+    }
+  }
+
+  private processOrangeHint(params: {
+    letter: string;
+    index: number;
+    includes: string[];
+    excludingPositions: LetterIndex[];
+  }): void {
+    const { letter, index, includes, excludingPositions } = params;
+    includes.push(letter);
+    excludingPositions.push({ index, letter });
+  }
+
+  private extractMatchingLetters(cells: Cell[]): LetterIndex[] {
+    return cells
+      .map((cell, index) => ({ index, letter: cell.letter }))
+      .filter(({ letter }) => letter !== null) as LetterIndex[];
+  }
+
+  private removeDuplicates<T>(array: T[]): T[] {
+    return [...new Set(array)];
+  }
+
+  private applyWordsFilter(params: {
     candidateWords: string[];
     wordsFilter: WordsFilter;
   }): string[] {
-    const words = [...candidateWords];
-    return words.filter((word) => {
-      // Check matching letters
-      const hasMatchingLetters = wordsFilter.matchingLetters.every(
-        ({ index, letter }) =>
-          word[index].toUpperCase() === letter.toUpperCase(),
-      );
-      if (!hasMatchingLetters) return false;
+    const { candidateWords, wordsFilter } = params;
 
-      // Check if word contains all required letters
-      const hasAllIncludes = wordsFilter.includes.every((letter) =>
-        word.toUpperCase().includes(letter.toUpperCase()),
-      );
-      if (!hasAllIncludes) return false;
+    return candidateWords.filter((word) =>
+      this.isWordValidForFilter({ word, wordsFilter }),
+    );
+  }
 
-      // Check position exclusions
-      const violatesPositionExclusions = wordsFilter.excludingPositions.some(
-        ({ index, letter }) =>
-          word[index].toUpperCase() === letter.toUpperCase(),
-      );
-      if (violatesPositionExclusions) return false;
+  private isWordValidForFilter(params: {
+    word: string;
+    wordsFilter: WordsFilter;
+  }): boolean {
+    const { word, wordsFilter } = params;
 
-      // Check if word doesn't contain excluded letters
-      const hasNoExcludes = !wordsFilter.excludes.some((letter) =>
-        word.toUpperCase().includes(letter.toUpperCase()),
-      );
-      if (!hasNoExcludes) return false;
+    return (
+      this.hasMatchingLetters({ word, wordsFilter }) &&
+      this.hasAllRequiredLetters({ word, wordsFilter }) &&
+      this.respectsPositionExclusions({ word, wordsFilter }) &&
+      this.hasNoExcludedLetters({ word, wordsFilter })
+    );
+  }
 
-      return true;
+  private hasMatchingLetters(params: {
+    word: string;
+    wordsFilter: WordsFilter;
+  }): boolean {
+    const { word, wordsFilter } = params;
+
+    return wordsFilter.matchingLetters.every(
+      ({ index, letter }) => word[index].toUpperCase() === letter.toUpperCase(),
+    );
+  }
+
+  private hasAllRequiredLetters(params: {
+    word: string;
+    wordsFilter: WordsFilter;
+  }): boolean {
+    const { word, wordsFilter } = params;
+
+    return wordsFilter.includes.every((letter) =>
+      word.toUpperCase().includes(letter.toUpperCase()),
+    );
+  }
+
+  private respectsPositionExclusions(params: {
+    word: string;
+    wordsFilter: WordsFilter;
+  }): boolean {
+    const { word, wordsFilter } = params;
+
+    return !wordsFilter.excludingPositions.some(
+      ({ index, letter }) => word[index].toUpperCase() === letter.toUpperCase(),
+    );
+  }
+
+  private hasNoExcludedLetters(params: {
+    word: string;
+    wordsFilter: WordsFilter;
+  }): boolean {
+    const { word, wordsFilter } = params;
+
+    return !wordsFilter.excludes.some((letter) =>
+      word.toUpperCase().includes(letter.toUpperCase()),
+    );
+  }
+
+  private selectBestWordOverall(
+    params: BestWordDeterminationParams,
+  ): WordScoreResultDirection | null {
+    const { candidateWordsHorizontal, candidateWordsVertical, boardState } =
+      params;
+    const missingLettersCount = this.getMissingLettersCount(boardState);
+
+    const prioritizedResult = this.getPrioritizedResult({
+      candidateWordsHorizontal,
+      candidateWordsVertical,
+      boardState,
+      missingLettersCount,
+    });
+
+    if (prioritizedResult) {
+      return prioritizedResult;
+    }
+
+    return this.getBestWordFromBothDirections({
+      candidateWordsHorizontal,
+      candidateWordsVertical,
+      boardState,
     });
   }
 
-  private determineBestWordOverall({
-    candidateWordsHorizontal,
-    candidateWordsVertical,
-    boardState,
-  }: {
+  private getMissingLettersCount(boardState: BoardState) {
+    const { cells: currentGuessCells } = this.getCurrentCells(boardState);
+
+    return {
+      horizontal: this.countMissingLetters(currentGuessCells.horizontal),
+      vertical: this.countMissingLetters(currentGuessCells.vertical),
+    };
+  }
+
+  private countMissingLetters(cells: Cell[]): number {
+    return cells.filter((cell) => cell.letter === null).length;
+  }
+
+  private getPrioritizedResult(params: {
     candidateWordsHorizontal: string[];
     candidateWordsVertical: string[];
     boardState: BoardState;
+    missingLettersCount: { horizontal: number; vertical: number };
   }): WordScoreResultDirection | null {
-    const { cells: currentGuessCells } = this.getCurrentCells(boardState);
+    const {
+      candidateWordsHorizontal,
+      candidateWordsVertical,
+      boardState,
+      missingLettersCount,
+    } = params;
 
-    const missingLetters = {
-      horizontal: currentGuessCells.horizontal.filter(
-        (cell) => cell.letter === null,
-      ).length,
-      vertical: currentGuessCells.vertical.filter(
-        (cell) => cell.letter === null,
-      ).length,
-    };
-
-    // We'll prioritize the word with the most missing letters
-    if (missingLetters.horizontal > missingLetters.vertical) {
-      const bestHorizontalWord = this.determineBestWord({
+    if (missingLettersCount.horizontal > missingLettersCount.vertical) {
+      return this.getBestWordForDirection({
         candidateWords: candidateWordsHorizontal,
         boardState,
         direction: Direction.Horizontal,
       });
-      if (bestHorizontalWord !== null) {
-        return {
-          ...bestHorizontalWord,
-          direction: Direction.Horizontal,
-        };
-      }
     }
-    if (missingLetters.horizontal < missingLetters.vertical) {
-      const bestVerticalWord = this.determineBestWord({
+
+    if (missingLettersCount.horizontal < missingLettersCount.vertical) {
+      return this.getBestWordForDirection({
         candidateWords: candidateWordsVertical,
         boardState,
         direction: Direction.Vertical,
       });
-      if (bestVerticalWord !== null) {
-        return {
-          ...bestVerticalWord,
-          direction: Direction.Vertical,
-        };
-      }
     }
 
-    // If the number of missing letters is the same, we return the best word overall
-    const bestWordHorizontal = this.determineBestWord({
+    return null;
+  }
+
+  private getBestWordForDirection(params: {
+    candidateWords: string[];
+    boardState: BoardState;
+    direction: Direction;
+  }): WordScoreResultDirection | null {
+    const { candidateWords, boardState, direction } = params;
+
+    const bestWord = this.findBestWord({
+      candidateWords,
+      boardState,
+      direction,
+    });
+
+    return bestWord ? { ...bestWord, direction } : null;
+  }
+
+  private getBestWordFromBothDirections(params: {
+    candidateWordsHorizontal: string[];
+    candidateWordsVertical: string[];
+    boardState: BoardState;
+  }): WordScoreResultDirection | null {
+    const { candidateWordsHorizontal, candidateWordsVertical, boardState } =
+      params;
+
+    const bestHorizontalWord = this.findBestWord({
       candidateWords: candidateWordsHorizontal,
       boardState,
       direction: Direction.Horizontal,
     });
-    const bestWordVertical = this.determineBestWord({
+
+    const bestVerticalWord = this.findBestWord({
       candidateWords: candidateWordsVertical,
       boardState,
       direction: Direction.Vertical,
     });
-    if (bestWordHorizontal === null && bestWordVertical === null) {
+
+    if (!bestHorizontalWord && !bestVerticalWord) {
       return null;
     }
-    const bestResultDirection =
-      (bestWordHorizontal?.confidence ?? 0) >
-      (bestWordVertical?.confidence ?? 0)
-        ? Direction.Horizontal
-        : Direction.Vertical;
+
+    const bestDirection = this.selectBetterDirection(
+      bestHorizontalWord,
+      bestVerticalWord,
+    );
     const bestResult =
-      bestResultDirection === Direction.Horizontal
-        ? bestWordHorizontal
-        : bestWordVertical;
-    return {
-      ...bestResult!,
-      direction: bestResultDirection,
-    };
+      bestDirection === Direction.Horizontal
+        ? bestHorizontalWord
+        : bestVerticalWord;
+
+    return { ...bestResult!, direction: bestDirection };
   }
 
-  private flipDirection(direction: Direction): Direction {
-    return direction === Direction.Horizontal
-      ? Direction.Vertical
-      : Direction.Horizontal;
+  private selectBetterDirection(
+    horizontalWord: WordScoreResult | null,
+    verticalWord: WordScoreResult | null,
+  ): Direction {
+    const horizontalConfidence = horizontalWord?.confidence ?? 0;
+    const verticalConfidence = verticalWord?.confidence ?? 0;
+
+    return horizontalConfidence > verticalConfidence
+      ? Direction.Horizontal
+      : Direction.Vertical;
   }
 
-  private determineBestWord({
-    candidateWords,
-    boardState,
-    direction,
-  }: {
-    candidateWords: string[];
-    boardState: BoardState;
-    direction: Direction;
-  }): WordScoreResult | null {
-    const bestWordScore = this.determineWordsScores({ candidateWords });
-    if (bestWordScore.length === 0) {
+  private findBestWord(
+    params: WordScoreCalculationParams,
+  ): WordScoreResult | null {
+    const { candidateWords, boardState, direction } = params;
+    const bestWordScores = this.calculateWordsScores({ candidateWords });
+
+    if (bestWordScores.length === 0) {
       return null;
     }
-    if (bestWordScore[0].confidence === 1) {
-      // It means we are 100% sure about the word. No need to simulate more
-      return bestWordScore[0];
+
+    if (this.isPerfectConfidence(bestWordScores[0])) {
+      return bestWordScores[0];
     }
-    // We will run a simulation to determine if the word is valid. We'll limit to 10 iterations
-    let simulatedBoard: BoardState['board'] = cloneDeep(boardState.board);
-    let currentGuessIndex = boardState.nextGuessIndex;
-    const maxIterations = 6;
-    for (const { word, confidence } of bestWordScore) {
-      let simulationWord = {
-        word,
-        confidence,
-        direction,
-      };
-      // restart the simulation
-      simulatedBoard = cloneDeep(boardState.board);
-      currentGuessIndex = boardState.nextGuessIndex;
-      let isValid = true;
-      console.log(
-        `Starting simulation for word: ${word} on index ${currentGuessIndex} ${simulationWord.direction}`,
-      );
-      for (let i = 0; i < maxIterations; i++) {
-        simulatedBoard = this.insertWordInBoard({
-          boardState: {
-            language: boardState.language,
-            guessesRemaining: boardState.guessesRemaining,
-            nextGuessIndex: currentGuessIndex,
-            board: simulatedBoard,
-          },
-          word: simulationWord.word,
-          direction: simulationWord.direction,
-        });
-        if (this.isBoardFull(simulatedBoard)) {
-          // No need to simulate more. This word is valid.
-          return { word, confidence };
-        }
-        currentGuessIndex = this.getNextIndex(currentGuessIndex);
-        const newBoardState = {
-          language: boardState.language,
-          guessesRemaining: boardState.guessesRemaining - i - 1,
-          nextGuessIndex: currentGuessIndex,
-          board: simulatedBoard,
-        };
-        const nextGuess = this.returnNextGuess({
-          boardState: newBoardState,
-        });
-        if (nextGuess === null) {
-          // go to next word
-          console.info(
-            `Found invalid board. Stopping simulation for word: ${word} on index ${boardState.nextGuessIndex} ${simulationWord.direction}`,
-          );
-          isValid = false;
-          break;
-        }
-        console.info(
-          `nextGuess: ${nextGuess?.word} confidence: ${nextGuess?.confidence}`,
-        );
-        simulationWord = nextGuess;
-      }
-      if (isValid) {
-        return { word, confidence };
+
+    return boardState && direction
+      ? this.findBestWordThroughSimulation({
+          candidateWords: bestWordScores,
+          boardState,
+          direction,
+        })
+      : bestWordScores[0];
+  }
+
+  private isPerfectConfidence(wordScore: WordScoreResult): boolean {
+    return wordScore.confidence === 1;
+  }
+
+  private findBestWordThroughSimulation(
+    params: SimulationParams,
+  ): WordScoreResult | null {
+    const { candidateWords, boardState, direction } = params;
+
+    for (const wordScore of candidateWords) {
+      if (
+        this.isWordValidThroughSimulation({ wordScore, boardState, direction })
+      ) {
+        return wordScore;
       }
     }
+
     return null;
   }
 
-  private insertWordInBoard({
-    boardState,
-    word,
-    direction,
-  }: {
+  private isWordValidThroughSimulation(params: {
+    wordScore: WordScoreResult;
     boardState: BoardState;
-    word: string;
     direction: Direction;
-  }): BoardState['board'] {
-    const currentGuessIndex = boardState.nextGuessIndex;
+  }): boolean {
+    const { wordScore, boardState, direction } = params;
+
+    let simulatedBoard = cloneDeep(boardState.board);
+    let currentGuessIndex = boardState.nextGuessIndex;
+    let simulationWord = { ...wordScore, direction };
+
+    console.log(
+      `Starting simulation for word: ${wordScore.word} on index ${currentGuessIndex} ${direction}`,
+    );
+
+    for (
+      let iteration = 0;
+      iteration < MAX_SIMULATION_ITERATIONS;
+      iteration++
+    ) {
+      simulatedBoard = this.insertWordInBoard({
+        boardState: {
+          ...boardState,
+          board: simulatedBoard,
+          nextGuessIndex: currentGuessIndex,
+        },
+        word: simulationWord.word,
+        direction: simulationWord.direction,
+      });
+
+      if (this.isBoardFull(simulatedBoard)) {
+        return true;
+      }
+
+      const nextSimulationStep = this.getNextSimulationStep({
+        boardState,
+        simulatedBoard,
+        currentGuessIndex,
+        iteration,
+      });
+
+      if (!nextSimulationStep) {
+        this.logInvalidSimulation(
+          wordScore.word,
+          boardState.nextGuessIndex,
+          direction,
+        );
+        return false;
+      }
+
+      currentGuessIndex = nextSimulationStep.nextGuessIndex;
+      simulationWord = nextSimulationStep.nextGuess;
+
+      console.info(
+        `nextGuess: ${simulationWord.word} confidence: ${simulationWord.confidence}`,
+      );
+    }
+
+    return true;
+  }
+
+  private getNextSimulationStep(params: {
+    boardState: BoardState;
+    simulatedBoard: BoardState['board'];
+    currentGuessIndex: number;
+    iteration: number;
+  }) {
+    const { boardState, simulatedBoard, currentGuessIndex, iteration } = params;
+
+    const nextGuessIndex = this.getNextIndex(currentGuessIndex);
+    const nextBoardState = this.createTestBoardState({
+      originalBoardState: boardState,
+      simulatedBoard,
+      index: nextGuessIndex,
+    });
+
+    nextBoardState.guessesRemaining =
+      boardState.guessesRemaining - iteration - 1;
+
+    const nextGuess = this.calculateNextGuess(nextBoardState);
+
+    return nextGuess ? { nextGuessIndex, nextGuess } : null;
+  }
+
+  private logInvalidSimulation(
+    word: string,
+    guessIndex: number,
+    direction: Direction,
+  ): void {
+    console.info(
+      `Found invalid board. Stopping simulation for word: ${word} on index ${guessIndex} ${direction}`,
+    );
+  }
+
+  private insertWordInBoard(params: WordInsertionParams): BoardState['board'] {
+    const { boardState, word, direction } = params;
+
     this.logBoardState(boardState);
 
     const newBoard = cloneDeep(boardState.board);
+
     if (direction === Direction.Horizontal) {
-      for (let i = 0; i < word.length; i++) {
-        const currentLetter = newBoard[currentGuessIndex][i].letter;
-        if (currentLetter !== null && currentLetter !== word[i].toUpperCase()) {
-          throw new Error(
-            `Conflict letter when trying to insert word: ${word} in direction: ${direction} on index: ${currentGuessIndex}`,
-          );
-        }
-        if (currentLetter === null) {
-          newBoard[currentGuessIndex][i].letter = word[i].toUpperCase();
-        }
-      }
+      this.insertHorizontalWord({
+        board: newBoard,
+        word,
+        guessIndex: boardState.nextGuessIndex,
+      });
     } else {
-      for (let i = 0; i < word.length; i++) {
-        const currentLetter = newBoard[i][currentGuessIndex].letter;
-        if (currentLetter !== null && currentLetter !== word[i].toUpperCase()) {
-          throw new Error(
-            `Conflict letter when trying to insert word: ${word} in direction: ${direction} on index: ${currentGuessIndex}`,
-          );
-        }
-        newBoard[i][currentGuessIndex].letter = word[i].toUpperCase();
+      this.insertVerticalWord({
+        board: newBoard,
+        word,
+        guessIndex: boardState.nextGuessIndex,
+      });
+    }
+
+    this.logBoardState({ ...boardState, board: newBoard });
+
+    return newBoard;
+  }
+
+  private insertHorizontalWord(params: {
+    board: BoardState['board'];
+    word: string;
+    guessIndex: number;
+  }): void {
+    const { board, word, guessIndex } = params;
+
+    for (let i = 0; i < word.length; i++) {
+      const currentLetter = board[guessIndex][i].letter;
+      const newLetter = word[i].toUpperCase();
+
+      this.validateLetterInsertion({
+        currentLetter,
+        newLetter,
+        word,
+        direction: Direction.Horizontal,
+        guessIndex,
+      });
+
+      if (currentLetter === null) {
+        board[guessIndex][i].letter = newLetter;
       }
     }
-    this.logBoardState({
-      ...boardState,
-      board: newBoard,
-    });
-    return newBoard;
+  }
+
+  private insertVerticalWord(params: {
+    board: BoardState['board'];
+    word: string;
+    guessIndex: number;
+  }): void {
+    const { board, word, guessIndex } = params;
+
+    for (let i = 0; i < word.length; i++) {
+      const currentLetter = board[i][guessIndex].letter;
+      const newLetter = word[i].toUpperCase();
+
+      this.validateLetterInsertion({
+        currentLetter,
+        newLetter,
+        word,
+        direction: Direction.Vertical,
+        guessIndex,
+      });
+
+      if (currentLetter === null) {
+        board[i][guessIndex].letter = newLetter;
+      }
+    }
+  }
+
+  private validateLetterInsertion(params: {
+    currentLetter: string | null;
+    newLetter: string;
+    word: string;
+    direction: Direction;
+    guessIndex: number;
+  }): void {
+    const { currentLetter, newLetter, word, direction, guessIndex } = params;
+
+    if (currentLetter !== null && currentLetter !== newLetter) {
+      throw new Error(
+        `Conflict letter when trying to insert word: ${word} in direction: ${direction} on index: ${guessIndex}`,
+      );
+    }
   }
 
   isBoardFull(board: BoardState['board']): boolean {
     return board
       .flat()
-      .filter(({ x, y }) => {
-        return !(
-          (x === 1 && y == 1) ||
-          (x === 1 && y == 3) ||
-          (x === 3 && y == 1) ||
-          (x === 3 && y == 3)
-        );
-      })
+      .filter((cell) => !this.isBlockedPosition(cell))
       .every((cell) => cell.letter !== null);
   }
 
-  private determineWordsScores({
-    candidateWords,
-  }: {
-    candidateWords: string[];
-  }): WordScoreResult[] {
+  private isBlockedPosition(cell: { x: number; y: number }): boolean {
+    const { x, y } = cell;
+    return (
+      (x === 1 && y === 1) ||
+      (x === 1 && y === 3) ||
+      (x === 3 && y === 1) ||
+      (x === 3 && y === 3)
+    );
+  }
+
+  private calculateWordsScores(
+    params: WordScoreCalculationParams,
+  ): WordScoreResult[] {
+    const { candidateWords } = params;
+
     if (!candidateWords || candidateWords.length === 0) {
       return [];
     }
 
-    const totalWords = candidateWords.length;
-    const wordsLengths = new Set(candidateWords.map((word) => word.length));
-    // If not all words are the same length, return the word with the most vowels
-    if (wordsLengths.size > 1) {
+    this.validateWordLengths(candidateWords);
+
+    const wordLength = candidateWords[0].length;
+    const statistics = this.buildLetterStatistics({
+      candidateWords,
+      wordLength,
+    });
+
+    return this.computeWordScores({ candidateWords, statistics, wordLength });
+  }
+
+  private validateWordLengths(candidateWords: string[]): void {
+    const uniqueLengths = new Set(candidateWords.map((word) => word.length));
+
+    if (uniqueLengths.size > 1) {
       throw new Error('Words are not all the same length');
     }
-    const wordLength = wordsLengths.values().next().value as number;
-    const statistics = new Map<number, Map<string, number>>(
+  }
+
+  private buildLetterStatistics(params: {
+    candidateWords: string[];
+    wordLength: number;
+  }) {
+    const { candidateWords, wordLength } = params;
+    const statistics = this.initializeStatistics(wordLength);
+
+    this.populateStatistics({ candidateWords, statistics });
+
+    return statistics;
+  }
+
+  private initializeStatistics(
+    wordLength: number,
+  ): Map<number, Map<string, number>> {
+    return new Map(
       Array(wordLength)
         .fill(0)
         .map((_, index) => [index, new Map<string, number>()]),
     );
+  }
 
-    // Set up statistics for each position in the word
+  private populateStatistics(params: {
+    candidateWords: string[];
+    statistics: Map<number, Map<string, number>>;
+  }): void {
+    const { candidateWords, statistics } = params;
+
     for (const word of candidateWords) {
-      const letters = word.split('');
-      for (const [letterIndex, letter] of letters.entries()) {
-        const existingLetterStatisticsCount =
-          statistics.get(letterIndex)!.get(letter) ?? 0;
-        statistics
-          .get(letterIndex)!
-          .set(letter, existingLetterStatisticsCount + 1);
-      }
+      this.updateWordStatistics({ word, statistics });
     }
+  }
 
-    // Find the word with the highest score
-    const wordsScores = candidateWords.map((word) => {
-      const score = word.split('').reduce((acc, letter, index) => {
-        return acc + (statistics.get(index)?.get(letter) ?? 0);
-      }, 0);
-      return {
-        word,
-        confidence: score / (totalWords * wordLength),
-      };
+  private updateWordStatistics(params: {
+    word: string;
+    statistics: Map<number, Map<string, number>>;
+  }): void {
+    const { word, statistics } = params;
+
+    word.split('').forEach((letter, index) => {
+      const letterMap = statistics.get(index)!;
+      const currentCount = letterMap.get(letter) ?? 0;
+      letterMap.set(letter, currentCount + 1);
     });
-    return orderBy(wordsScores, (word) => word.confidence, 'desc');
+  }
+
+  private computeWordScores(params: {
+    candidateWords: string[];
+    statistics: Map<number, Map<string, number>>;
+    wordLength: number;
+  }): WordScoreResult[] {
+    const { candidateWords, statistics, wordLength } = params;
+    const totalWords = candidateWords.length;
+
+    const wordScores = candidateWords.map((word) => ({
+      word,
+      confidence: this.calculateWordConfidence({
+        word,
+        statistics,
+        totalWords,
+        wordLength,
+      }),
+    }));
+
+    return orderBy(wordScores, 'confidence', 'desc');
+  }
+
+  private calculateWordConfidence(params: {
+    word: string;
+    statistics: Map<number, Map<string, number>>;
+    totalWords: number;
+    wordLength: number;
+  }): number {
+    const { word, statistics, totalWords, wordLength } = params;
+
+    const score = word.split('').reduce((totalScore, letter, index) => {
+      const letterScore = statistics.get(index)?.get(letter) ?? 0;
+      return totalScore + letterScore;
+    }, 0);
+
+    return score / (totalWords * wordLength);
   }
 
   private getNextIndex(currentGuessIndex: number): number {
-    const guessSequence = [0, 2, 4];
-    const currentSequenceIndex = guessSequence.indexOf(currentGuessIndex);
+    const currentSequenceIndex = GUESS_SEQUENCE.indexOf(currentGuessIndex);
+
     if (currentSequenceIndex === -1) {
       throw new Error(`Invalid current guess index: ${currentGuessIndex}`);
     }
-    const nextSequenceIndex = (currentSequenceIndex + 1) % guessSequence.length;
-    return guessSequence[nextSequenceIndex];
+
+    const nextSequenceIndex =
+      (currentSequenceIndex + 1) % GUESS_SEQUENCE.length;
+    return GUESS_SEQUENCE[nextSequenceIndex];
   }
+
   private logBoardState(boardState: BoardState) {
     console.info('\n📋 Board State:');
     console.info('┌─────┬─────┬─────┬─────┬─────┐');
