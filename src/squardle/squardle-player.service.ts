@@ -505,9 +505,6 @@ export class SquardlePlayerService {
   }): BoardState['board'] {
     const currentGuessIndex = boardState.nextGuessIndex;
     this.logBoardState(boardState);
-    console.info(
-      `Inserting word: ${word} in direction: ${direction} on index: ${currentGuessIndex}`,
-    );
 
     const newBoard = cloneDeep(boardState.board);
     if (direction === Direction.Horizontal) {
@@ -611,9 +608,43 @@ export class SquardlePlayerService {
     return guessSequence[nextSequenceIndex];
   }
   private logBoardState(boardState: BoardState) {
-    // Write a nice board state to the console
-    for (const row of boardState.board) {
-      console.info(row.map((cell) => cell.letter ?? '_').join(' '));
+    console.info('\n📋 Board State:');
+    console.info('┌─────┬─────┬─────┬─────┬─────┐');
+
+    for (let y = 0; y < boardState.board.length; y++) {
+      const row = boardState.board[y];
+      let rowDisplay = '│';
+
+      for (let x = 0; x < row.length; x++) {
+        const cell = row[x];
+        let cellContent: string;
+
+        // Check if this is a blocked position
+        const isBlockedPosition =
+          (x === 1 && y === 1) ||
+          (x === 1 && y === 3) ||
+          (x === 3 && y === 1) ||
+          (x === 3 && y === 3);
+
+        if (isBlockedPosition) {
+          cellContent = '     '; // Empty space for blocked cells
+        } else if (cell.letter !== null) {
+          cellContent = `  ${cell.letter}  `; // Centered letter with equal padding
+        } else {
+          cellContent = ' ___ '; // Empty cell with underscores
+        }
+
+        rowDisplay += cellContent + '│';
+      }
+
+      console.info(rowDisplay);
+
+      // Add separator line between rows (except after last row)
+      if (y < boardState.board.length - 1) {
+        console.info('├─────┼─────┼─────┼─────┼─────┤');
+      }
     }
+
+    console.info('└─────┴─────┴─────┴─────┴─────┘');
   }
 }
