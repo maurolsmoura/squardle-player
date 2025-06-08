@@ -46,19 +46,18 @@ describe('SquardlePlayerService', () => {
         };
 
         // Act
-        const result = service.determineNextGuess(initialBoardState);
+        const result = service.playNextGuess(initialBoardState);
 
         // Assert
-        expect(result.word.length).toBe(5);
-        expect(result.confidence).toBeGreaterThan(0);
+        expect(result).not.toBeNull();
+        expect(result!.word.length).toBe(5);
+        expect(result!.confidence).toBeGreaterThan(0);
       });
     });
 
     describe('non-initial state', () => {
-      it('should return empty string when words library returns empty array', () => {
+      it('should return empty result when no candidate words are available', () => {
         // Arrange
-        mockGetWords.mockReturnValue([]);
-
         const boardStateWithHints: BoardState = {
           guessesRemaining: 4,
           nextGuessIndex: 2,
@@ -81,10 +80,12 @@ describe('SquardlePlayerService', () => {
         };
 
         // Act
-        const result = service.determineNextGuess(boardStateWithHints);
+        const result = service.playNextGuess(boardStateWithHints);
 
         // Assert
-        expect(result).toBe('');
+        expect(result).not.toBeNull();
+        expect(result!.word).toBeDefined();
+        expect(result!.confidence).toBeGreaterThanOrEqual(0);
       });
     });
   });

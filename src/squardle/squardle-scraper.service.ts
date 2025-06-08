@@ -17,7 +17,7 @@ export class SquardleScraperService implements OnModuleInit {
   private readonly WAIT_FOR_ELEMENT_TIMEOUT = 10000;
 
   private browser: puppeteer.Browser | null = null;
-  private page: puppeteer.Page | null = null;
+  public page: puppeteer.Page | null = null;
 
   /**
    * Called when the module is initialized. Connects to browser on startup.
@@ -342,16 +342,22 @@ export class SquardleScraperService implements OnModuleInit {
       };
 
       // Extract board state
-      for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
         const row: any[] = [];
-        for (let x = 0; x < 5; x++) {
+        for (let y = 0; y < 5; y++) {
           // Check if this is a valid gameplay cell
           if (!isValidCell(x, y)) {
+            row.push({
+              x: y,
+              y: x,
+              letter: null,
+              hints: [],
+            });
             continue;
           }
 
           // Get the letter from the mid element
-          const letterElement = document.getElementById(`mid_${x}_${y}`);
+          const letterElement = document.getElementById(`mid_${y}_${x}`);
           const letter = letterElement?.textContent?.trim() || null;
 
           // Collect hints from small squares (multiple guesses)
@@ -360,13 +366,13 @@ export class SquardleScraperService implements OnModuleInit {
           // Look for small squares for this position - check range 0-9 to handle gaps
           for (let guessIndex = 0; guessIndex < 10; guessIndex++) {
             const smallSquareElement = document.getElementById(
-              `small_${x}_${y}_${guessIndex}`,
+              `small_${y}_${x}_${guessIndex}`,
             );
 
             if (!smallSquareElement) continue; // Skip missing indices
 
             const smallLetterElement = document.getElementById(
-              `small_css_${x}_${y}_${guessIndex}`,
+              `small_css_${y}_${x}_${guessIndex}`,
             );
             const hintLetter = smallLetterElement?.textContent?.trim();
 
@@ -401,8 +407,8 @@ export class SquardleScraperService implements OnModuleInit {
           }
 
           row.push({
-            x,
-            y,
+            x: y,
+            y: x,
             letter,
             hints,
           });
