@@ -2,6 +2,12 @@
 
 Automated Squardle gameplay using NestJS and browser automation.
 
+## 🎥 Demo Video
+
+[![Squardle Player Demo](https://img.youtube.com/vi/DX--Gy4t9V8/maxresdefault.jpg)](https://youtu.be/DX--Gy4t9V8)
+
+_Click the image above to watch the demo video_
+
 ## Quick Start
 
 ### 1. Install Dependencies
@@ -34,9 +40,10 @@ POST /play
 POST /squardle/auto/play
 ```
 
-## API Documentation
+## API Documentation and UI
 
-- **Swagger UI**: `http://localhost:3000/api`
+- **UI to interact with all commands**: `http://localhost:3000/api`
+
 - **OpenAPI JSON**: `http://localhost:3000/api-json`
 
 ## Usage

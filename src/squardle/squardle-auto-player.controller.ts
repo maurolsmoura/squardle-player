@@ -88,8 +88,10 @@ export class SquardleAutoPlayerController {
           };
         }
 
-        this.logger.log(
-          `🎯 AI suggests: "${nextGuess.word}" (confidence: ${nextGuess.confidence.toFixed(3)})`,
+        this.logger.debug(
+          `🎯 AI suggests: "${nextGuess.word}" (confidence: ${(
+            nextGuess.confidence * 100
+          ).toFixed(0)}%)`,
         );
 
         // Submit the guess
